@@ -194,33 +194,39 @@ def render_population_torch(population, device=None):
 
 
 #Fitness Function
-def population_fitness_rmse( population, target):
+def population_fitness_rmse(population, target):
 
     """
-    Renders each individual with the existing PIL render(),
-    then calculates RMSE for the whole population using PyTorch.
-    This approach leverages the GPU for efficient batch processing of the fitness evaluation, while still using the existing CPU-based rendering function.
+    Compute the RMSE fitness of each individual in the population against the target image.
     """
 
     # Determine the device (GPU if available, otherwise CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Move rendered images and target to GPU.
-    rendered_tensor = render_population_torch(population, device=device)
+    # Move target to GPU.
     target_tensor = torch.as_tensor(target, dtype=torch.float32, device=device)
+    target_tensor = target_tensor.unsqueeze(0) # ( H, W, C) --> (1, H, W, C), C=4 for RGBA.
 
-    # Add population dimension to target to allow broadcasting during RMSE calculation:
-    # target_tensor: ( H, W, C) --> (1, H, W, C), C=4 for RGBA.
-    # rendered_tensor: (POP_SIZE, H, W, C)
-    target_tensor = target_tensor.unsqueeze(0)
+    all_rmse = []
 
-    # Compare rendered images to target --> (POP_SIZE, H, W, C) - (1, H, W, C) --> (POP_SIZE, H, W, C)
-    diff = rendered_tensor - target_tensor
+    # Evaluate the population in smaller chunks.
+    for start in range(0, len(population), 25):
+        end = start + 25
+        batch = population[start:end]
 
-    # RMSE per individual
-    rmse = torch.sqrt(torch.mean(diff * diff, dim=(1, 2, 3))) # dim=(1,2,3) means we average over H, W, C to get one RMSE value per individual in the population
+        # Render only this batch on the GPU.
+        rendered_tensor = render_population_torch(batch, device=device)
 
-    return rmse.detach().cpu().numpy().tolist()
+        # Compare each rendered individual in the batch against the target.
+        diff = rendered_tensor - target_tensor
+
+        # RMSE per individual in this batch.
+        rmse = torch.sqrt(torch.mean(diff * diff, dim=(1, 2, 3)))
+
+        # Move batch results back to CPU and append to the final list.
+        all_rmse.extend(rmse.detach().cpu().numpy().tolist())
+
+    return all_rmse
 
 
 # Selection Function------------------------------------------------------------------------------
