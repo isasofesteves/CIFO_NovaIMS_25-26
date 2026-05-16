@@ -266,10 +266,12 @@ def mixed_mutation(indiv, mut_prob, weights=None):
         triangle_sort_mutation,
         alpha_focus_mutation,
         shrink_triangle_mutation,
+        grow_triangle_mutation,
+        translate_triangle_mutation
     ]
     
     if weights is None:
-        weights = [0.25, 0.20, 0.10, 0.10, 0.15, 0.10, 0.10]  # default
+        weights = [0.25, 0.20, 0.05, 0.05, 0.15, 0.10, 0.05, 0.10, 0.05]  # default
 
     chosen = random.choices(operators, weights=weights, k=1)[0]
     return chosen(indiv, mut_prob)
@@ -430,6 +432,34 @@ def shrink_triangle_mutation(indiv, mut_prob, factor=0.5):
             tri[2*i]   = _clamp(cx + factor * (tri[2*i]   - cx), 0, IMG_W-1)
             tri[2*i+1] = _clamp(cy + factor * (tri[2*i+1] - cy), 0, IMG_H-1)
         mutated[idx] = tri.astype(mutated.dtype)
+    return mutated
+
+def grow_triangle_mutation(indiv, mut_prob, factor=1.5):
+    """Grows a random triangle away from its centroid by a given factor (> 1)"""
+    mutated = np.copy(indiv)
+    if random.random() <= mut_prob:
+        idx = random.randint(0, NUM_TRIANGLES - 1)
+        tri = mutated[idx].copy().astype(float)
+        cx = (tri[0] + tri[2] + tri[4]) / 3
+        cy = (tri[1] + tri[3] + tri[5]) / 3
+        for i in range(3):
+            tri[2*i]   = _clamp(cx + factor * (tri[2*i]   - cx), 0, IMG_W-1)
+            tri[2*i+1] = _clamp(cy + factor * (tri[2*i+1] - cy), 0, IMG_H-1)
+        mutated[idx] = tri.astype(mutated.dtype)
+    return mutated
+
+def translate_triangle_mutation(indiv, mut_prob, delta=30):
+    """Translates a random triangle (maintains shape, changes position)."""
+    mutated = np.copy(indiv)
+    if random.random() <= mut_prob:
+        idx = random.randint(0, NUM_TRIANGLES - 1)
+        tri = mutated[idx].copy()
+        dx = random.randint(-delta, delta)
+        dy = random.randint(-delta, delta)
+        for i in range(3):
+            tri[2*i]   = _clamp(tri[2*i]   + dx, 0, IMG_W-1)
+            tri[2*i+1] = _clamp(tri[2*i+1] + dy, 0, IMG_H-1)
+        mutated[idx] = tri
     return mutated
 
 
