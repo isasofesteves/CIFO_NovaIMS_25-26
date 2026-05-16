@@ -574,7 +574,7 @@ def calculate_niche_counts(population, niche_radius):
 
     n = len(population)
     niche_counts = [0.0] * n
-    rendered = [render(ind) for ind in population]
+    rendered = render_population_torch(population).cpu().numpy()  # Render all individuals once for distance calculations
     for i in range(n):
         for j in range(i + 1, n):
             distance = phenotypic_distance(rendered[i], rendered[j])
