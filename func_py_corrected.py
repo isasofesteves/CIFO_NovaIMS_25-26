@@ -3,6 +3,7 @@
 #------------------------------------------------------------------------------------------------------------------------------------------#
 
 import numpy as np
+import torch
 from PIL import Image, ImageDraw, ImageFilter
 import random, copy
 from sklearn.cluster import KMeans
@@ -105,14 +106,36 @@ def render(individual):
 
 
 #Fitness Function
-def fitness_rmse( individual, target):
-    
-    """ Root Mean Squared Error between rendered image and target."""
+def population_fitness_rmse( population, target):
 
-    rendered = render(individual)
-    diff     = rendered - target
+    """
+    Renders each individual with the existing PIL render(),
+    then calculates RMSE for the whole population using PyTorch.
+    This approach leverages the GPU for efficient batch processing of the fitness evaluation, while still using the existing CPU-based rendering function.
+    """
 
-    return float(np.sqrt(np.mean(diff ** 2)))
+    # Determine the device (GPU if available, otherwise CPU)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Render all individuals using the existing CPU/PIL render function.
+    rendered_images = np.stack([render(individual) for individual in population])  
+
+    # Move rendered images and target to GPU.
+    rendered_tensor = torch.as_tensor(rendered_images, dtype=torch.float32, device=device)
+    target_tensor = torch.as_tensor(target, dtype=torch.float32, device=device)
+
+    # Add population dimension to target to allow broadcasting during RMSE calculation:
+    # target_tensor: ( H, W, C) --> (1, H, W, C), C=4 for RGBA.
+    # rendered_tensor: (POP_SIZE, H, W, C)
+    target_tensor = target_tensor.unsqueeze(0)
+
+    # Compare rendered images to target --> (POP_SIZE, H, W, C) - (1, H, W, C) --> (POP_SIZE, H, W, C)
+    diff = rendered_tensor - target_tensor
+
+    # RMSE per individual
+    rmse = torch.sqrt(torch.mean(diff * diff, dim=(1, 2, 3))) # dim=(1,2,3) means we average over H, W, C to get one RMSE value per individual in the population
+
+    return rmse.detach().cpu().numpy().tolist()
 
 
 # Selection Function------------------------------------------------------------------------------
