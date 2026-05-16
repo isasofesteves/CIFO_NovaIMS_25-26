@@ -69,14 +69,16 @@ def decode(individual):
 
 
 def render(individual):
+    # Create an empty transparent image (canvas) with RGBA channels
     img = Image.new("RGBA", (IMG_W, IMG_H), (0, 0, 0, 0))
-    
-    for points, color in decode(individual):
-        overlay = Image.new("RGBA", (IMG_W, IMG_H), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay, "RGBA")
-        draw.polygon(points, fill=color)
 
-        img = Image.alpha_composite(img, overlay)
+    # Decode each gene from [x1,y1,x2,y2,x3,y3,r,g,b,a] into triangle points [(x1,y1),(x2,y2),(x3,y3)] and RGBA color (r,g,b,a)
+    for points, color in decode(individual):
+        overlay = Image.new("RGBA", (IMG_W, IMG_H), (0, 0, 0, 0)) # Create a temporary transparent layer for the current triangle
+        draw = ImageDraw.Draw(overlay, "RGBA") # Create a drawing object associated with the overlay image
+        draw.polygon(points, fill=color) # Draw the triangle polygon with the specified RGBA color
+
+        img.alpha_composite(overlay) # Merge the overlay with the main image using alpha transparency
 
     return np.array(img, dtype=np.float32)
 
