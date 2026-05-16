@@ -75,12 +75,32 @@ def render(individual):
 
     # Decode each gene from [x1,y1,x2,y2,x3,y3,r,g,b,a] into triangle points [(x1,y1),(x2,y2),(x3,y3)] and RGBA color (r,g,b,a)
     for points, color in decode(individual):
-        # Create a transparent overlay to draw the triangle, then composite it onto the main image.
-        overlay = Image.new("RGBA", (IMG_W, IMG_H), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay, "RGBA")
-        draw.polygon(points, fill=color)
+        # Compute the polygon bounding box (smallest rectangle that contains the 3 points) so only the necessary area is processed.
+        xs = [p[0] for p in points] # all the x values
+        ys = [p[1] for p in points] # all the y values
 
-        img = Image.alpha_composite(img, overlay)
+        # Clamp the bounding box to the image boundaries.
+        x1 = max(0, int(min(xs)))
+        y1 = max(0, int(min(ys)))
+        x2 = min(IMG_W, int(max(xs)) + 1)
+        y2 = min(IMG_H, int(max(ys)) + 1)
+
+        # Skip polygons that are completely outside the image.
+        if x1 >= x2 or y1 >= y2:
+            continue
+
+        # Convert points to local coordinates inside the smaller overlay.
+        local_points = [(x - x1, y - y1) for x, y in points]
+
+        # Create an overlay only as large as the bounding box, not the full image.
+        overlay = Image.new("RGBA", (x2 - x1, y2 - y1), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay, "RGBA")
+
+        # Draw the polygon onto the local overlay.
+        draw.polygon(local_points, fill=color)
+
+        # Alpha composite only the region where the polygon exists.
+        img.alpha_composite(overlay, dest=(x1, y1))
 
     return np.array(img, dtype=np.float32)
 
