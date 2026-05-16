@@ -105,6 +105,94 @@ def render(individual):
     return np.array(img, dtype=np.float32)
 
 
+def render_population_torch(population, device=None):
+    
+    """
+    Render a full population of triangle-based individuals using PyTorch.
+
+    Parameters:
+        population:
+            List or array with shape (POP_SIZE, NUM_TRIANGLES, 10).
+
+            Each triangle/gene has:
+            [x0, y0, x1, y1, x2, y2, R, G, B, A]
+
+        device:
+            PyTorch device. If None, uses CUDA when available.
+
+    Returns:
+        rendered:
+            Torch tensor with shape (POP_SIZE, IMG_H, IMG_W, 4).
+            Values are in [0, 255].
+    """
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Convert population to torch tensor on the specified device
+    pop_tensor = torch.as_tensor(np.array(population), dtype=torch.float32, device=device)  # (POP_SIZE, NUM_TRIANGLES, 10)
+
+    # Initialize an empty canvas for each individual
+    canvas_rgb = torch.zeros((pop_tensor.shape[0], IMG_H, IMG_W, 3), dtype=torch.float32, device=device) # (POP_SIZE, H, W, 3) for RGB channels
+    canvas_a = torch.zeros((pop_tensor.shape[0], IMG_H, IMG_W, 1), dtype=torch.float32, device=device) # (POP_SIZE, H, W, 1) for alpha channel
+
+    # Create a coordinate grid for the image dimensions (H, W) 
+    yy, xx = torch.meshgrid(torch.arange(IMG_H, device=device), torch.arange(IMG_W, device=device),
+        indexing="ij") # ensure (H, W) order for correct broadcasting
+    
+    # Reshape coordinate grids to (1, H, W) for broadcasting with population of triangles
+    xx = xx.float().unsqueeze(0)
+    yy = yy.float().unsqueeze(0)
+
+    # At each iteration, we process the t-th triangle of every individual. This means all individuals are rendered in parallel for that triangle index.
+    for t in range(NUM_TRIANGLES):
+
+        # Select triangle t from all individuals.
+        tri = pop_tensor[:, t, :]
+
+        # Extract triangle vertex coordinates.
+        x0 = tri[:, 0].view(-1, 1, 1) # view(-1, 1, 1) reshapes to (POP_SIZE, 1, 1) for broadcasting, -1 means infer the batch size dimension
+        y0 = tri[:, 1].view(-1, 1, 1)
+
+        x1 = tri[:, 2].view(-1, 1, 1)
+        y1 = tri[:, 3].view(-1, 1, 1)
+
+        x2 = tri[:, 4].view(-1, 1, 1)
+        y2 = tri[:, 5].view(-1, 1, 1)
+
+        # Extract RGB and alpha values for the triangle.
+        color = tri[:, 6:9].view(pop_tensor.shape[0], 1, 1, 3)
+        alpha = (tri[:, 9].view(pop_tensor.shape[0], 1, 1, 1) / 255.0).clamp(0.0, 1.0)
+
+        # Create a mask to check if a pixel is inside the triangle using the "Golden Triangle Test".
+        # 1st: compute the barycentric coordinates of the pixel with respect to the triangle.
+        denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        denom = torch.where(torch.abs(denom) < 1e-6, torch.ones_like(denom), denom) # avoid division by zero for degenerate triangles
+
+        cord1 = ((y1 - y2) * (xx - x2) + (x2 - x1) * (yy - y2)) / denom 
+        cord2 = ((y2 - y0) * (xx - x2) + (x0 - x2) * (yy - y2)) / denom 
+        cord3 = 1.0 - cord1 - cord2
+
+        # 2nd: check if the barycentric coordinates are all between 0 and 1
+        mask = (cord1 >= 0) & (cord2 >= 0) & (cord3 >= 0) & (cord1 <= 1) & (cord2 <= 1) & (cord3 <= 1) # (POP_SIZE, H, W) boolean mask where True means pixel is inside the triangle
+        mask = mask.unsqueeze(-1) # (POP_SIZE, H, W, 1) to match color and alpha shapes
+
+        # Compute the source alpha for the current triangle, which is the triangle's alpha value multiplied by the mask (1 inside the triangle, 0 outside).
+        src_a = alpha * mask.float() 
+
+        # New color = triangle color * transparency + old canvas color * part that is still visible
+        # This simulates transparent triangles being layered on top of each other.
+        canvas_rgb = color * src_a + canvas_rgb * (1.0 - src_a)
+
+        # Update the accumulated alpha channel using the same logic.
+        canvas_a = 255.0 * src_a + canvas_a * (1.0 - src_a)
+
+    # Combine RGB and alpha into one RGBA tensor.
+    rendered = torch.cat([canvas_rgb, canvas_a], dim=-1)
+
+    return rendered
+
+
 #Fitness Function
 def population_fitness_rmse( population, target):
 
@@ -117,11 +205,8 @@ def population_fitness_rmse( population, target):
     # Determine the device (GPU if available, otherwise CPU)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Render all individuals using the existing CPU/PIL render function.
-    rendered_images = np.stack([render(individual) for individual in population])  
-
     # Move rendered images and target to GPU.
-    rendered_tensor = torch.as_tensor(rendered_images, dtype=torch.float32, device=device)
+    rendered_tensor = render_population_torch(population, device=device)
     target_tensor = torch.as_tensor(target, dtype=torch.float32, device=device)
 
     # Add population dimension to target to allow broadcasting during RMSE calculation:
