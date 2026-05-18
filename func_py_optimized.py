@@ -637,6 +637,7 @@ def calculate_niche_counts(population, niche_radius, rendered=None):
 
 
 def apply_fitness_sharing(raw_fitnesses, niche_counts):
+    # tirei +1e-6 pq já fiz na calculate niche counts
 
     """
     Apply fitness sharing: shared_fitness = raw_fitness / niche_count.
@@ -650,7 +651,7 @@ def apply_fitness_sharing(raw_fitnesses, niche_counts):
         list[float]: Shared fitness values
     """
     
-    return [fit / (count + 1e-6) for fit, count in zip(raw_fitnesses, niche_counts)]
+    return [fit / count for fit, count in zip(raw_fitnesses, niche_counts)]
 
 
 
