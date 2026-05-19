@@ -625,36 +625,52 @@ def triangular_sharing_function(distance, niche_radius):
 
 
 def calculate_niche_counts(population, niche_radius, rendered=None):
-    ### ALTERADO: adicionei variável 'rendered' para não termos de dar render cada vez q a função é chamada
-    # e dei veectorize no calculo das distancias
 
     """
-    Calculate the niche count for each individual.
-    Niche count = sum of sharing function values with all other individuals.
-    
-    Args:
-        population: list of individuals
-        niche_radius (float): Niche radius parameter
-    
-    Returns:
-        list[float]: Niche count for each individual
+    Calculate niche counts using GPU vectorized operations.
+
+    Parameters
+    ----------
+    population : list or ndarray
+        Population of individuals.
+
+    niche_radius : float
+        Radius used in the sharing function.
+
+    rendered : cupy.ndarray or None
+        Optional pre-rendered population tensor with shape (N, H, W, 4).
+
+    Returns
+    -------
+    list[float]
+        Niche count for each individual.
     """
 
+    # Render only if necessary
     if rendered is None:
-        rendered = render_population_torch(population).cpu().numpy()
-    
-    n = len(rendered)
-    flat = rendered.reshape(n, -1).astype(np.float32)  # (n, pixels)
+        rendered = render_population_cuda(population)
 
-    # Calcula TODAS as distâncias de uma vez
-    sq_norms = np.sum(flat ** 2, axis=1)
-    distances = np.sqrt(np.maximum(sq_norms[:, None] + sq_norms[None, :] - 2 * flat @ flat.T, 0))
+    # Flatten images
+    n = rendered.shape[0]
 
-    # Sharing function vectorizada
-    sharing_matrix = np.maximum(0, 1 - distances / niche_radius)
-    np.fill_diagonal(sharing_matrix, 0)
+    flat = rendered.reshape(n, -1).astype(cp.float32)
 
-    return (sharing_matrix.sum(axis=1) + 1).tolist()
+    # Compute pairwise Euclidean distances
+    sq_norms = cp.sum(flat ** 2, axis=1)
+
+    distances = cp.sqrt(
+        cp.maximum(
+            sq_norms[:, None] + sq_norms[None, :] - 2 * flat @ flat.T, 0))
+
+    # Sharing function
+    sharing_matrix = cp.maximum(0, 1 - distances / niche_radius)
+
+    # Ignore self-distance
+    cp.fill_diagonal(sharing_matrix, 0)
+
+    niche_counts = sharing_matrix.sum(axis=1) + 1
+
+    return cp.asnumpy(niche_counts).tolist()
 
 
 def apply_fitness_sharing(raw_fitnesses, niche_counts):
