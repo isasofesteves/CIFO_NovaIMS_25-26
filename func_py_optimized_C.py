@@ -222,6 +222,17 @@ def render_population_cuda(population):
     return canvas_gpu
 
 
+def render(individual):
+
+    population = np.expand_dims(individual, axis=0)
+
+    # Render using CUDA pipeline
+    rendered = render_population_cuda(population)
+
+    # Remove batch dimension
+    img = cp.asnumpy(rendered[0])
+
+    return img.astype(np.float32)
 
 
 
