@@ -96,7 +96,7 @@ void render_triangles_cuda(
 {   // each thread is responsible for a pixel (x,y) of an individual
     int x = blockIdx.x * blockDim.x + threadIdx.x; // thread x pixel coord
     int y = blockIdx.y * blockDim.y + threadIdx.y; // thread y pixel coord
-    int indiv_idx  = blockIdx.z; // batch 
+    int indiv_idx  = blockIdx.z; // image id 
 
     if (x >= IMG_W || y >= IMG_H || indiv_idx >= pop_size) return; // stop outside image bounds
 
@@ -172,13 +172,13 @@ void render_triangles_cuda(
 
 def compute_bboxes(population):
 
+    # Creating a bounding box array: each traingle gets 4 box vertices
     bboxes = np.zeros(
         (population.shape[0], NUM_TRIANGLES, 4),
-        dtype=np.float32
-    )
+        dtype=np.float32)
 
-    x = population[:, :, [0,2,4]]
-    y = population[:, :, [1,3,5]]
+    x = population[:, :, [0,2,4]] # population x coordinates
+    y = population[:, :, [1,3,5]] # population y coordinates
 
     bboxes[:,:,0] = x.min(axis=2)  # minX
     bboxes[:,:,1] = y.min(axis=2)  # minY
@@ -191,35 +191,35 @@ def render_population_cuda(population):
 
     population = np.asarray(population, dtype=np.float32)
 
-    N = population.shape[0]
+    N = population.shape[0] # population size 
 
-    bboxes = compute_bboxes(population)
+    bboxes = compute_bboxes(population) # getting the bounding box array for the population
 
-    tris_gpu = cp.asarray(population)
-    bbox_gpu = cp.asarray(bboxes)
+    triangles_gpu = cp.asarray(population) # gpu transfer
+    bboxes_gpu = cp.asarray(bboxes)
 
-    canvas_gpu = cp.zeros((N, IMG_H, IMG_W, 4),dtype=cp.float32)
+    output_gpu = cp.zeros((N, IMG_H, IMG_W, 4),dtype=cp.float32) # output canvas
 
-    threads = (16, 16, 1)
+    threads = (16, 16, 1) # 16x16 threads (256) per block
 
     blocks = (
-        (IMG_W + threads[0] - 1) // threads[0],
-        (IMG_H + threads[1] - 1) // threads[1],
-        N
-    )
+        (IMG_W + threads[0] - 1) // threads[0], # floor division 
+        (IMG_H + threads[1] - 1) // threads[1], 
+        N)
 
+    # running the renderer 
     _render_kernel_opt(
-        blocks,
-        threads,
-        (
-            canvas_gpu.ravel(),
-            tris_gpu.ravel(),
-            bbox_gpu.ravel(),
-            np.int32(N)
+        blocks, # gridsize by blocks
+        threads, # block size (16x16)
+        (   # arguments of the render_triangles_cuda kernel function
+            output_gpu.ravel(), # output image tensor
+            triangles_gpu.ravel(), # triangle data
+            bboxes_gpu.ravel(), # bounding boxes
+            np.int32(N) # pop size
         )
     )
 
-    return canvas_gpu
+    return output_gpu
 
 
 def render(individual):
@@ -688,7 +688,7 @@ def apply_fitness_sharing(raw_fitnesses, niche_counts):
         list[float]: Shared fitness values
     """
     
-    return [fit / count for fit, count in zip(raw_fitnesses, niche_counts)]
+    return [fit * count for fit, count in zip(raw_fitnesses, niche_counts)]
 
 
 
