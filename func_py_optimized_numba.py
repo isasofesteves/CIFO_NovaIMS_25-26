@@ -717,5 +717,6 @@ def population_fitness_ssim(rendered_population, target_torch):
         data_range=1.0,
         size_average=False)
 
-    return 1.0 - scores
+    fitness = 1.0 - scores
+    return fitness.detach().cpu().numpy().tolist()
 
