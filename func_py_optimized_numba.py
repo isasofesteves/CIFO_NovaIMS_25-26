@@ -227,7 +227,7 @@ def render_population_cuda(population):
         N)
 
     # return GPU array
-    return output_gpu
+    return cp.asarray(output_gpu)
 
 
 def render(individual):
