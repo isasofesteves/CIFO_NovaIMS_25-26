@@ -701,33 +701,21 @@ def apply_fitness_sharing(raw_fitnesses, niche_counts):
 
 
 
-def population_fitness_ssim(rendered_population, target):
+def population_fitness_ssim(rendered_population, target_torch):
 
-    # CuPy to Torch
-    rendered_torch = torch.utils.dlpack.from_dlpack(
-        rendered_population.toDlpack())
+    rendered_torch = torch.utils.dlpack.from_dlpack(rendered_population)
 
-    target_gpu = cp.asarray(target, dtype=cp.float32)
-
-    target_torch = torch.utils.dlpack.from_dlpack(
-        target_gpu.toDlpack())
-
-    # normalization
     rendered_torch = rendered_torch / 255.0
-    target_torch = target_torch / 255.0
 
-    # permutation
     rendered_torch = rendered_torch.permute(0, 3, 1, 2)
-    target_torch = target_torch.permute(2, 0, 1).unsqueeze(0)
 
-    # batching
-    target_torch = target_torch.expand(rendered_torch.shape[0],-1,-1,-1)
+    target_batch = target_torch.expand(rendered_torch.shape[0], -1, -1, -1)
 
-    # compute SSIM
-    scores = ssim(rendered_torch, target_torch, data_range=1.0, size_average=False)
+    scores = ssim(
+        rendered_torch,
+        target_batch,
+        data_range=1.0,
+        size_average=False)
 
-    
-    fitness = 1.0 - scores
-
-    return fitness.cpu().numpy().tolist()
+    return 1.0 - scores
 
