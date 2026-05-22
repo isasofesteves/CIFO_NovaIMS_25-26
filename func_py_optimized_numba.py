@@ -11,6 +11,7 @@ import time
 import cupy as cp
 from numba import cuda
 import math
+from skimage.color import rgb2lab
 
 #------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                        PARAMETERS                                                                        #
@@ -701,22 +702,21 @@ def apply_fitness_sharing(raw_fitnesses, niche_counts):
 
 
 
-def population_fitness_ssim(rendered_population, target_torch):
+def population_fitness_deltaE(rendered_population, target_lab):
 
-    rendered_torch = torch.utils.dlpack.from_dlpack(rendered_population)
+    rendered_cpu = cp.asnumpy(rendered_population)
 
-    rendered_torch = rendered_torch / 255.0
+    fitnesses = []
 
-    rendered_torch = rendered_torch.permute(0, 3, 1, 2)
+    for img in rendered_cpu:
 
-    target_batch = target_torch.expand(rendered_torch.shape[0], -1, -1, -1)
+        img_lab = rgb2lab(img[..., :3] / 255.0)
 
-    scores = ssim(
-        rendered_torch,
-        target_batch,
-        data_range=1.0,
-        size_average=False)
+        delta = img_lab - target_lab
 
-    fitness = 1.0 - scores
-    return fitness.detach().cpu().numpy().tolist()
+        de = np.sqrt(np.mean(np.sum(delta**2, axis=2)))
+
+        fitnesses.append(de)
+
+    return fitnesses
 
