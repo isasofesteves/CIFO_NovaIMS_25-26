@@ -701,21 +701,63 @@ def apply_fitness_sharing(raw_fitnesses, niche_counts):
 
 
 
+def rgb2lab_gpu(rgb):
+
+    # sRGB -> linear RGB
+    rgb = cp.where(
+        rgb > 0.04045,
+        ((rgb + 0.055) / 1.055) ** 2.4,
+        rgb / 12.92
+    )
+
+    r = rgb[..., 0]
+    g = rgb[..., 1]
+    b = rgb[..., 2]
+
+
+    x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375
+    y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750
+    z = r * 0.0193339 + g * 0.1191920 + b * 0.9503041
+
+
+    x /= 0.95047
+    z /= 1.08883
+
+    eps = 216 / 24389
+    kappa = 24389 / 27
+
+    def f(t):
+        return cp.where(
+            t > eps,
+            cp.cbrt(t),
+            (kappa * t + 16) / 116
+        )
+
+    fx = f(x)
+    fy = f(y)
+    fz = f(z)
+
+    L = 116 * fy - 16
+    a = 500 * (fx - fy)
+    b = 200 * (fy - fz)
+
+    return cp.stack((L, a, b), axis=-1)
+
+
 def population_fitness_deltaE(rendered_population, target_lab):
 
-    rendered_cpu = cp.asnumpy(rendered_population)
+    rgb = rendered_population[..., :3].astype(cp.float32) / 255.0
 
-    fitnesses = []
+    population_lab = rgb2lab_gpu(rgb)
 
-    for img in rendered_cpu:
+    delta = population_lab - target_lab[None, ...]
 
-        img_lab = rgb2lab(img[..., :3] / 255.0)
+    de = cp.sqrt(
+        cp.mean(
+            cp.sum(delta ** 2, axis=3),
+            axis=(1, 2)
+        )
+    )
 
-        delta = img_lab - target_lab
-
-        de = np.sqrt(np.mean(np.sum(delta**2, axis=2)))
-
-        fitnesses.append(de)
-
-    return fitnesses
+    return de.tolist()
 
