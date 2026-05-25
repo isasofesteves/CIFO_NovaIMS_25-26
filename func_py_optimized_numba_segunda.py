@@ -242,9 +242,8 @@ def render(individual):
 
 #Fitness Function
 
-def population_fitness_rmse(rendered_population, target):
+def population_fitness_rmse(rendered_population, target_gpu):
 
-    target_gpu = cp.asarray(target, dtype=cp.float32)
 
     diff = rendered_population - target_gpu[None, :, :, :]
 
