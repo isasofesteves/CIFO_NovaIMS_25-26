@@ -6,7 +6,6 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFilter
 import random
-from pytorch_msssim import ssim
 import time
 import cupy as cp
 
@@ -692,73 +691,8 @@ def apply_fitness_sharing(raw_fitnesses, niche_counts):
 
 
 
-def population_fitness_ssim(population, target):
 
-    """
-    Compute SSIM-based fitness for each individual against the target image.
-    
-    SSIM values lie in the [-1,1], with values close to 1 indicating high similarity.
 
-    To adapt SSIM for minimization-based evolutionary algorithms, fitness is computed as: fitness = 1 - SSIM
 
-    Note: 
-    SSIM is computed only on RGB channels. The alpha channel is excluded because SSIM is intended to measure perceptual image structure and
-    visual similarity rather than transparency composition.
-
-    """
-
-    # GPU if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Move target to GPU
-    target_tensor = torch.as_tensor(target, dtype=torch.float32, device=device)
-
-    # (H,W,C) [height, width, channels] -> (1,C,H,W) as expected by pytorch
-    target_tensor = target_tensor.permute(2, 0, 1).unsqueeze(0) # unsqueeze adds a batch dimension
-
-    # Discard alpha
-    target_tensor = target_tensor[:, :3]
-
-    # Normalize to [0,1]
-    target_tensor = target_tensor / 255.0
-
-    all_scores = []
-
-    batch_size = 25
-
-    for start in range(0, len(population), batch_size):
-
-        end = start + batch_size
-        batch = population[start:end]
-
-        # Render the batch
-        rendered_tensor = render_population_torch(batch, device=device)
-
-        # (B,H,W,C) -> (B,C,H,W)
-        rendered_tensor = rendered_tensor.permute(0, 3, 1, 2)
-
-        # Discard alpha
-        rendered_tensor = rendered_tensor[:, :3]
-
-        # Normalize
-        rendered_tensor = rendered_tensor / 255.0
-
-        # Expand target to batch size for comparison
-        target_batch = target_tensor.expand(rendered_tensor.shape[0], -1, -1, -1)
-
-        # SSIM per image
-        scores = ssim(
-            rendered_tensor,
-            target_batch,
-            data_range=1.0,
-            size_average=False # 1 score per individual
-        )
-
-        scores = 1.0 - scores
-
-        # Move back to CPU and convert to list
-        all_scores.extend(scores.detach().cpu().numpy().tolist())
-
-    return all_scores
 
 
