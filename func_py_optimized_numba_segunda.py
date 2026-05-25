@@ -12,15 +12,6 @@ from numba import cuda
 import math
 
 
-cuda.set_memory_pool(cuda.MemoryPool())
-
-
-def warmup_cuda():
-    """Call this once at the start of your program"""
-    dummy_pop = np.zeros((1, NUM_TRIANGLES, 10), dtype=np.float32)
-    dummy_bbox = np.zeros((1, NUM_TRIANGLES, 4), dtype=np.float32)
-    dummy_out = cuda.device_array((1, IMG_H, IMG_W, 4), dtype=np.float32)
-    render_triangles_cuda[(1,1,1), (1,1,1)](dummy_out, dummy_pop, dummy_bbox, 1)
 
 #------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                        PARAMETERS                                                                        #
