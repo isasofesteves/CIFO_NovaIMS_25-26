@@ -649,6 +649,9 @@ def calculate_niche_counts(population, niche_radius, rendered=None):
     if rendered is None:
         rendered = render_population_cuda(population)
 
+    if not isinstance(rendered, cp.ndarray):
+        rendered = cp.asarray(rendered)
+
     # Flatten images
     n = rendered.shape[0]
 
