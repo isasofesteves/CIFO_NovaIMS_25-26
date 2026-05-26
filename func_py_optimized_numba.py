@@ -6,11 +6,11 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFilter
 import random
-import time
 import cupy as cp
 from numba import cuda
-import math
-from skimage.color import rgb2lab
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 #------------------------------------------------------------------------------------------------------------------------------------------#
 #                                                        PARAMETERS                                                                        #
@@ -18,9 +18,6 @@ from skimage.color import rgb2lab
 
 IMG_W, IMG_H    = 300, 400
 NUM_TRIANGLES   = 100
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 
 
 #------------------------------------------------------------------------------------------------------------------------------------------#
@@ -77,31 +74,71 @@ def decode(individual):
     return triangles
 
 
+#----------------------------------------------------------------------------------------------------------
 
-#--------------------------------------------------------------------------------------------------
-
-# GPU KERNEL 
+# RENDERING FUNCTIONS
 
 
 @cuda.jit
 def render_triangles_cuda(output, triangles, bboxes, pop_size):
 
+    """
+        CUDA kernel that renders a population of triangle-based images in parallel.
+
+        Each CUDA thread is responsible for computing the RGBA value of a single
+        pixel (x, y) for one individual in the population. The kernel iterates
+        through all triangles belonging to that individual and performs alpha
+        blending to accumulate the final pixel color.
+
+        Rendering process:
+            1. Determine the thread's pixel center coordinates and individual index.
+            2. Reject threads outside image/population bounds.
+            3. For each triangle:
+                - Check whether the pixel lies inside the triangle bounding box.
+                - Compute triangle area.
+                - Compute barycentric coordinates.
+                - Determine whether the pixel is inside the triangle.
+                - Blend the triangle color into the accumulated pixel color
+                using alpha compositing.
+            4. Store the final RGBA value in the output.
+
+        ------------------------------
+        Parameters:
+
+            output [cuda.device_array]: image buffer with shape (pop_size, IMG_H, IMG_W, 4); stores 
+        the rendered RGBA values for every individual.
+
+            triangles [cuda.device_array]: triangle data for the population with shape (pop_size, NUM_TRIANGLES, 10)
+
+            bboxes [cuda.device_array]: precomputed axis-aligned bounding boxes for each triangle with shape
+        (pop_size, NUM_TRIANGLES, 4); bounding box format: [minX, minY, maxX, maxY] 
+
+
+            pop_size [int]: number of individuals/images being rendered.
+
+    """
+
+    # thread indices: x -> pixel x-coord.; y -> pixel y-coord.; indiv_idx -> inddex of individual in the population
     x, y, indiv_idx = cuda.grid(3)
 
+    # ignore threads outside valid image or population bounds
     if x >= IMG_W or y >= IMG_H or indiv_idx >= pop_size:
         return
 
+    # centering pixel coords.
     cx = x + 0.5
     cy = y + 0.5
 
+    # accumulated RGBA color for this pixel (initialized as 0)
     acc_r = 0.0
     acc_g = 0.0
     acc_b = 0.0
     acc_a = 0.0
 
+    # iterate through every triangle of the current individual
     for t in range(NUM_TRIANGLES):
 
-        # bounding box
+        # bounding box of current triangle
         minX = bboxes[indiv_idx, t, 0]
         minY = bboxes[indiv_idx, t, 1]
         maxX = bboxes[indiv_idx, t, 2]
@@ -111,8 +148,10 @@ def render_triangles_cuda(output, triangles, bboxes, pop_size):
         if cx < minX or cx > maxX or cy < minY or cy > maxY:
             continue
 
+        # triangle data (x1, y1, x2, y2, x3, y3, R, G, B, A)
         tri = triangles[indiv_idx, t]
 
+        # triangle vertices
         x0 = tri[0]
         y0 = tri[1]
 
@@ -122,7 +161,7 @@ def render_triangles_cuda(output, triangles, bboxes, pop_size):
         x2 = tri[4]
         y2 = tri[5]
 
-        # alpha
+        # normalizing alpha
         alpha = tri[9] / 255.0
 
         if alpha < 0.0:
@@ -131,6 +170,7 @@ def render_triangles_cuda(output, triangles, bboxes, pop_size):
         if alpha > 1.0:
             alpha = 1.0
 
+        # skipping fully transparent triangles
         if alpha <= 0.0:
             continue
 
@@ -139,37 +179,51 @@ def render_triangles_cuda(output, triangles, bboxes, pop_size):
 
         abs_area = abs(area)
 
+        # skip excessively small triangles
         if abs_area < 0.2:
             continue
 
-        # barycentric coordinates
+        # barycentric coordinates used to determine whether the pixel lies inside the triangle
         bc0 = ((y1 - y2) * (cx - x2) + (x2 - x1) * (cy - y2)) / abs_area
         bc1 = ((y2 - y0) * (cx - x2) + (x0 - x2) * (cy - y2)) / abs_area
         bc2 = 1.0 - bc0 - bc1
 
-        # outside triangle
+        # if one of the barycentric coords. is negative the pixel is outside the triangle and that triangle is skipped
         if bc0 < 0.0 or bc1 < 0.0 or bc2 < 0.0:
             continue
 
-        # alpha blending
+        # alpha blending weights
         inv_alpha = 1.0 - alpha
 
+        # cumulative pixel RGBA values (previous values have inv_alpha weight and new ones have alpha weight)
         acc_r = tri[6] * alpha + acc_r * inv_alpha
         acc_g = tri[7] * alpha + acc_g * inv_alpha
         acc_b = tri[8] * alpha + acc_b * inv_alpha
         acc_a = 255.0 * alpha + acc_a * inv_alpha
 
-    # final pixel
+    # store final RGBA pixel value
     output[indiv_idx, y, x, 0] = acc_r
     output[indiv_idx, y, x, 1] = acc_g
     output[indiv_idx, y, x, 2] = acc_b
     output[indiv_idx, y, x, 3] = acc_a
 
 
-# BOUNDING BOXES
+
 
 
 def compute_bboxes(population):
+    '''
+        For every triangle in the population, this function computes the smallest axis-aligned rectangle
+    that contains said triangle, known as its bounding box.
+
+    --------------
+        Parameters:
+            population [array]: (pop_size, NUM_TRIANGLES, TRIANGLE_DATA)
+        
+        Returns:
+            bboxes [array]: bounding boxes with shape (pop_size, NUM_TRIANGLES, 4) 
+
+    '''
 
     population = np.asarray(population, dtype=np.float32)
 
@@ -190,9 +244,34 @@ def compute_bboxes(population):
 
 
 
-# POPULATION RENDERER
+
 
 def render_population_cuda(population):
+    '''
+        Renders an entire population of triangle-based images on the GPU.
+
+        This function prepares the population data, computes triangle bounding
+    boxes, transfers all required data to the GPU, launches the CUDA rendering
+    kernel, and returns the rendered images as a CuPy array.
+
+        Rendering workflow:
+        1. Get the population size (N).
+        2. Compute bounding boxes for all triangles.
+        3. Transfer triangle and bounding box data to GPU memory.
+        4. Allocate an output image buffer on the GPU.
+        5. Configure CUDA execution parameters.
+        6. Launch the rendering kernel.
+        7. Return the rendered images.
+
+    ---------------------
+        Parameters:
+            population [array]: population with shape (N, NUM_TRIANGLES, TRIANGLE_DATA)
+        where TRIANGLE_DATA has shape [x0, y0, x1, y1, x2, y2, r, g, b, alpha]
+
+        Returns: 
+            cupy.ndarray: Rendered RGBA images stored on the GPU with shape (N, IMG_H, IMG_W, 4)
+
+    '''
 
     population = np.asarray(population, dtype=np.float32)
 
@@ -231,13 +310,27 @@ def render_population_cuda(population):
 
 
 def render(individual):
+    '''
+        Renders a single triangle-based individual into an RGBA image.
 
+        Since the GPU rendering pipeline expects a population of individuals, the input individual is 
+    temporarily expanded into a population of size 1.
+
+    ---------------------
+        Params:
+            individual [array]: Triangle representation of a single individual with shape (NUM_TRIANGLES, TRIANGLE_DATA)
+
+        Returns:
+            np.ndarray: rendered RGBA image with shape (IMG_H, IMG_W, 4)
+    '''
+
+    # adding a batch dimension so the individual becomes a population of size 1
     population = np.expand_dims(individual, axis=0)
 
-    # Render using CUDA pipeline
+    # render using CUDA rendering pipeline
     rendered = render_population_cuda(population)
 
-    # Remove batch dimension
+    # remove batch dimension and transfer image from GPU to CPU memory
     img = cp.asnumpy(rendered[0])
 
     return img.astype(np.float32)
@@ -247,17 +340,31 @@ def render(individual):
 # -----------------------------------------------------------------------------------------------
 
 
-
-#Fitness Function
+# Fitness Function--------------------------------------------------------------------------------
 
 def population_fitness_rmse(rendered_population, target):
+    '''
+        Computes the RMSE (Root Mean Squared Error) fitness for a population of rendered images compared
+    to a target image. 
 
+    ------------------
+        Parameters:
+            rendered_population [cupy.ndarray]: Batch of rendered images with shape (N, IMG_H, IMG_W, 4)
+            target [array]: target image to compare against
+        
+            Returns:
+            list[float]: list containing RMSE for each individual of the population
+    '''
+
+    # transfering the target to gpu
     target_gpu = cp.asarray(target, dtype=cp.float32)
 
+    # pixewise difference between image and target
     diff = rendered_population - target_gpu[None, :, :, :]
-
+    # RMSE computation
     rmse = cp.sqrt(cp.mean(diff * diff, axis=(1,2,3)))
 
+    # list of RMSE values for the population
     return cp.asnumpy(rmse).tolist()
 
 
@@ -435,6 +542,7 @@ def creep_mutation(indiv, mut_prob, vertex_delta=15, color_delta=20):
 
     return mutated
 
+
 def triangle_sort_mutation(indiv, mut_prob):
     """ Randomly selects two triangles and swaps their positions in the individual's array."""
     mutated = np.copy(indiv)
@@ -442,6 +550,7 @@ def triangle_sort_mutation(indiv, mut_prob):
         i, j = random.sample(range(NUM_TRIANGLES), 2)
         mutated[i], mutated[j] = mutated[j].copy(), mutated[i].copy()
     return mutated
+
 
 def alpha_focus_mutation(indiv, mut_prob, delta=15):
     """ Specifically mutates the alpha channel of a random triangle to increase or decrease its opacity"""
@@ -452,6 +561,7 @@ def alpha_focus_mutation(indiv, mut_prob, delta=15):
         tri[-1] = _clamp(tri[-1] + random.randint(-delta, delta))  # mutate alpha channel (last value)
         mutated[idx] = tri
     return mutated
+
 
 def shrink_triangle_mutation(indiv, mut_prob, factor=0.5):
     """ Shrinks a random triangle towards its centroid by a given factor (0 < factor < 1) """
@@ -467,6 +577,7 @@ def shrink_triangle_mutation(indiv, mut_prob, factor=0.5):
         mutated[idx] = tri.astype(mutated.dtype)
     return mutated
 
+
 def grow_triangle_mutation(indiv, mut_prob, factor=1.5):
     """Grows a random triangle away from its centroid by a given factor (> 1)"""
     mutated = np.copy(indiv)
@@ -480,6 +591,7 @@ def grow_triangle_mutation(indiv, mut_prob, factor=1.5):
             tri[2*i+1] = _clamp(cy + factor * (tri[2*i+1] - cy), 0, IMG_H-1)
         mutated[idx] = tri.astype(mutated.dtype)
     return mutated
+
 
 def translate_triangle_mutation(indiv, mut_prob, delta=30):
     """Translates a random triangle (maintains shape, changes position)."""
@@ -584,52 +696,6 @@ def two_point_crossover(parent1, parent2, crossover_prob):
 
     return np.copy(parent1), np.copy(parent2)
 
-"""----------------------------------------------------------------------------------------------------------------------------------------------
-# tirei da calculate_niche_counts
-
-# Fitness Sharing Functions--------------------------------------------------------------------
-def phenotypic_distance(img1, img2):
-
-
-    Calculate Euclidean distance between two rendered images.
-    Lower distance = more similar phenotypes.
-    
-    Args:
-        img1, img2: numpy arrays of rendered images (same shape)
-    
-    Returns:
-        float: Euclidean distance
-
-
-    # Flatten images and compute L2 norm
-    diff = img1.flatten() - img2.flatten()
-    return np.sqrt(np.sum(diff ** 2))
-
-
-
-def triangular_sharing_function(distance, niche_radius):
-
-
-    Triangular sharing function: penalizes fitness based on distance to neighbors.
-    
-    sh(d) = 1 - (d / niche_radius)  if d < niche_radius
-    sh(d) = 0                        if d >= niche_radius
-    
-    Args:
-        distance (float): Distance to a neighbor
-        niche_radius (float): Threshold distance for the niche
-    
-    Returns:
-        float: Sharing value (0 to 1)
-
-
-    if distance < niche_radius:
-        return 1 - (distance / niche_radius)
-    return 0
-
-------------------------------------------------------------------------------------------------------------
-
-"""
 
 
 def calculate_niche_counts(population, niche_radius, rendered=None):
@@ -682,7 +748,6 @@ def calculate_niche_counts(population, niche_radius, rendered=None):
 
 
 def apply_fitness_sharing(raw_fitnesses, niche_counts):
-    # tirei +1e-6 pq já fiz na calculate niche counts
 
     """
     Apply fitness sharing: shared_fitness = raw_fitness / niche_count.
